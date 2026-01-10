@@ -1,0 +1,10 @@
+# Archivos temporales de Excel
+~$*.xlsx
+
+# Archivos temporales
+*.tmp
+*.log
+
+# Cache
+__pycache__/
+*.pyc
