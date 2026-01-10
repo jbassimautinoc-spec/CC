@@ -1,5 +1,5 @@
 # CONTROL INTELIGENTE DE CONSUMO – GRUPO BCA
-# Versión FINAL v10 – robusta (sin KeyError) + filtros + exportación Excel
+# Versión FINAL v11 – DESVIO visible + fecha última carga + export Excel
 # --------------------------------------------------
 
 import re
@@ -15,19 +15,17 @@ from datetime import datetime
 # ==========================
 st.set_page_config(page_title="Control de Consumo BCA", layout="wide")
 
-TOLERANCIA_PCT = 0.03
+TOLERANCIA_PCT = 0.03  # 3%
 
-BASE_PATH = "base.xlsx"
-NOMINA_PATH = "Nomina_consumo_camion.xlsx"
-
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_PATH = os.path.join(BASE_DIR, "base.xlsx")
+NOMINA_PATH = os.path.join(BASE_DIR, "Nomina_consumo_camion.xlsx")
 
 LOGO_PATHS = [
-    "logotipo_bca.png",
-    "logo_bca.png",
-    "logo_bca.jpg",
-    "logo_bca.jpeg",
+    os.path.join(BASE_DIR, "logo_bca.png"),
+    os.path.join(BASE_DIR, "logo_bca.jpg"),
+    os.path.join(BASE_DIR, "logo_bca.jpeg"),
 ]
-
 
 COLOR_PRINCIPAL = "#006778"
 COLOR_SECUNDARIO = "#009999"
@@ -83,7 +81,8 @@ if not st.session_state["autenticado"]:
 # ==========================
 # CSS
 # ==========================
-st.markdown("""
+st.markdown(
+    """
 <style>
 html, body, [class*="css"] { font-size: 18px; }
 .card {
@@ -94,7 +93,9 @@ html, body, [class*="css"] { font-size: 18px; }
     text-align: center;
 }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 # ==========================
 # HELPERS
@@ -102,9 +103,11 @@ html, body, [class*="css"] { font-size: 18px; }
 def es_patente_valida(p):
     if p is None or (isinstance(p, float) and np.isnan(p)):
         return False
-    return bool(re.match(r"^[A-Z]{3}[0-9]{3}$|^[A-Z]{2}[0-9]{3}[A-Z]{2}$", str(p).upper()))
+    return bool(
+        re.match(r"^[A-Z]{3}[0-9]{3}$|^[A-Z]{2}[0-9]{3}[A-Z]{2}$", str(p).upper())
+    )
 
-def to_num_col(s):
+def to_num_col(s: pd.Series) -> pd.Series:
     return pd.to_numeric(s.astype(str).str.replace(",", ".", regex=False), errors="coerce")
 
 def normalizar_base(df):
@@ -118,7 +121,6 @@ def normalizar_base(df):
             rename[c] = "FECHA"
         elif "ODOM" in cu or "ODÓMETRO" in cu or "KM" in cu or "KILOM" in cu:
             rename[c] = "KM"
-
         elif "LIT" in cu or "PRODUCTO" in cu:
             rename[c] = "LITROS"
 
@@ -155,7 +157,7 @@ def normalizar_nomina(df):
                 df = df.rename(columns={c: "MODELO"})
                 break
 
-    # Consumo teórico: buscamos una columna razonable
+    # Consumo teórico (columna razonable)
     col_consumo = None
     for c in df.columns:
         cu = c.upper()
@@ -167,10 +169,8 @@ def normalizar_nomina(df):
         df = df.rename(columns={col_consumo: "LITROS_100KM"})
         df["LITROS_100KM"] = to_num_col(df["LITROS_100KM"])
     else:
-        # Si falta, la creamos vacía (NaN) y el sistema marcará NOMINA_FALTANTE
         df["LITROS_100KM"] = np.nan
 
-    # Asegurar columnas mínimas
     if "MODELO" not in df.columns:
         df["MODELO"] = np.nan
 
@@ -190,9 +190,7 @@ def calcular_eventos(df):
     df.loc[df["KM_DELTA"] <= 0, "ESTADO_DATOS"] = "ERROR DATOS"
     df.loc[df["LITROS"] <= 0, "ESTADO_DATOS"] = "ERROR DATOS"
 
-    # -----------------------------
-    # NUEVA REGLA: CONTINUIDAD
-    # -----------------------------
+    # Regla continuidad
     df["ERROR_ANT"] = (
         df.groupby("PATENTE")["ESTADO_DATOS"]
           .shift(1)
@@ -206,7 +204,6 @@ def calcular_eventos(df):
     )
 
     return df
-
 
 def clasificar_estado(cons_real, cons_teor, errores):
     if errores > 0:
@@ -222,6 +219,7 @@ def clasificar_estado(cons_real, cons_teor, errores):
     return "CORRECTO"
 
 def motivo_sin_datos(row):
+    # Si hay errores en eventos -> km invalido (auditoría)
     if row.get("ERRORES", 0) > 0:
         return "KM_INVALIDO"
     km = row.get("KM_RECORRIDOS", np.nan)
@@ -263,7 +261,8 @@ with c_logo:
             break
 
 with c_title:
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <div style="background:linear-gradient(90deg,{COLOR_PRINCIPAL},{COLOR_SECUNDARIO});
                 padding:22px 28px;
                 border-radius:20px;
@@ -275,7 +274,9 @@ with c_title:
             Estados + auditoría · Grupo BCA
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -313,14 +314,21 @@ if pat_sel:
 # CÁLCULO
 # ==========================
 ev = calcular_eventos(df_f)
+
+# Última carga evaluada por patente (de todo el set filtrado)
+ultima_fecha = (
+    ev.groupby("PATENTE")["FECHA"]
+      .max()
+      .reset_index(name="FECHA_ULTIMA_CARGA")
+)
+
 ok = ev[
     (ev["ESTADO_DATOS"] == "OK") &
     (ev["TRAMO_VALIDO"]) &
     (ev["KM_DELTA"] > 0)
 ]
 
-
-# Litros total (auditoría)
+# Litros total (auditoría) (incluye todo)
 agg_litros_total = ev.groupby("PATENTE", as_index=False).agg(
     LITROS_TOTALES=("LITROS", "sum")
 )
@@ -332,15 +340,18 @@ agg_ok = ok.groupby("PATENTE", as_index=False).agg(
 )
 
 # Errores
-err = ev.groupby("PATENTE")["ESTADO_DATOS"] \
-        .apply(lambda s: (s == "ERROR DATOS").sum()) \
-        .reset_index(name="ERRORES")
+err = (
+    ev.groupby("PATENTE")["ESTADO_DATOS"]
+      .apply(lambda s: (s == "ERROR DATOS").sum())
+      .reset_index(name="ERRORES")
+)
 
 df = (
     agg_litros_total
     .merge(agg_ok, on="PATENTE", how="left")
     .merge(err, on="PATENTE", how="left")
     .merge(df_nom, on="PATENTE", how="left")
+    .merge(ultima_fecha, on="PATENTE", how="left")
 )
 
 df["LITROS_OK"] = df["LITROS_OK"].fillna(0.0)
@@ -352,6 +363,21 @@ df["CONSUMO_REAL_L_100KM"] = np.where(
     np.nan
 )
 
+df["DESVIO_PCT"] = np.where(
+    df["LITROS_100KM"].notna() & (df["LITROS_100KM"] > 0),
+    (df["CONSUMO_REAL_L_100KM"] - df["LITROS_100KM"]) / df["LITROS_100KM"] * 100,
+    np.nan
+)
+
+# Redondeo (visual)
+df["CONSUMO_REAL_L_100KM"] = df["CONSUMO_REAL_L_100KM"].round(2)
+df["DESVIO_PCT"] = df["DESVIO_PCT"].round(2)
+
+# Fecha estética
+df["FECHA_ULTIMA_CARGA"] = pd.to_datetime(df["FECHA_ULTIMA_CARGA"], errors="coerce")
+df["FECHA_ULTIMA_CARGA_STR"] = df["FECHA_ULTIMA_CARGA"].dt.strftime("%d/%m/%Y")
+
+# Estado / motivo / semáforo
 df["ESTADO"] = df.apply(
     lambda r: clasificar_estado(r["CONSUMO_REAL_L_100KM"], r["LITROS_100KM"], r["ERRORES"]),
     axis=1
@@ -364,26 +390,42 @@ df["MOTIVO_SIN_DATOS"] = df.apply(
 
 df["SEMAFORO"] = df.apply(icono_estado, axis=1)
 
-# Filtro modelo (solo si el usuario selecciona)
+# Filtros post-cálculo
 if mod_sel:
     df = df[df["MODELO"].isin(mod_sel)]
-
-# Filtro estado
 if estado_sel:
     df = df[df["ESTADO"].isin(estado_sel)]
+
+# ==========================
+# EXPORT + TABLA (UN SOLO df_export, NO SE PISA)
+# ==========================
+df_export = df[
+    [
+        "SEMAFORO", "ESTADO", "MOTIVO_SIN_DATOS",
+        "PATENTE", "MODELO",
+        "FECHA_ULTIMA_CARGA_STR",
+        "KM_RECORRIDOS",
+        "LITROS_TOTALES", "LITROS_OK",
+        "CONSUMO_REAL_L_100KM", "LITROS_100KM",
+        "DESVIO_PCT",
+    ]
+].rename(columns={
+    "FECHA_ULTIMA_CARGA_STR": "FECHA_ULTIMA_CARGA",
+    "DESVIO_PCT": "DESVIO_%"
+}).sort_values("PATENTE")
+
+# Asegurar que se vea como % (string) sin perder valor numérico en Excel:
+# - En pantalla: mostramos DESVIO_% con % bonito
+# - En Excel: dejamos también una columna numérica DESVIO_NUM (opcional)
+df_export["DESVIO_%"] = df_export["DESVIO_%"].apply(
+    lambda x: (f"{x:.2f}%" if pd.notna(x) else "")
+)
 
 # ==========================
 # EXPORTACIÓN (1 click)
 # ==========================
 st.sidebar.markdown("---")
 nombre_archivo = f"consumo_bca_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-df_export = df[[
-    "SEMAFORO", "ESTADO", "MOTIVO_SIN_DATOS",
-    "PATENTE", "MODELO",
-    "KM_RECORRIDOS",
-    "LITROS_TOTALES", "LITROS_OK",
-    "CONSUMO_REAL_L_100KM", "LITROS_100KM"
-]].sort_values("PATENTE")
 
 st.sidebar.download_button(
     label="📤 Descargar Excel",
@@ -399,22 +441,47 @@ st.subheader("Resumen general")
 
 c1, c2, c3, c4 = st.columns(4)
 with c1:
-    st.markdown(f'<div class="card">🟢 CORRECTO<br><h2>{(df["ESTADO"]=="CORRECTO").sum()}</h2></div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="card">🟢 CORRECTO<br><h2>{(df["ESTADO"]=="CORRECTO").sum()}</h2></div>',
+        unsafe_allow_html=True
+    )
 with c2:
-    st.markdown(f'<div class="card">🟡 A AUDITAR<br><h2>{(df["ESTADO"]=="A AUDITAR").sum()}</h2></div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="card">🟡 A AUDITAR<br><h2>{(df["ESTADO"]=="A AUDITAR").sum()}</h2></div>',
+        unsafe_allow_html=True
+    )
 with c3:
-    st.markdown(f'<div class="card">🟡 SIN DATOS<br><h2>{(df["ESTADO"]=="SIN DATOS").sum()}</h2></div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="card">🟡 SIN DATOS<br><h2>{(df["ESTADO"]=="SIN DATOS").sum()}</h2></div>',
+        unsafe_allow_html=True
+    )
 with c4:
-    st.markdown(f'<div class="card">🔴 ERROR DATOS<br><h2>{(df["ESTADO"]=="ERROR DATOS").sum()}</h2></div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="card">🔴 ERROR DATOS<br><h2>{(df["ESTADO"]=="ERROR DATOS").sum()}</h2></div>',
+        unsafe_allow_html=True
+    )
+
+# Última fecha global del filtro (estética)
+fecha_global = ev["FECHA"].max()
+if pd.notna(fecha_global):
+    st.caption(f"📌 Última carga evaluada en el rango seleccionado: **{fecha_global.strftime('%d/%m/%Y %H:%M')}**")
 
 # ==========================
 # TABLA
 # ==========================
 st.subheader("Detalle por patente")
 
-st.dataframe(df_export, use_container_width=True)
+st.dataframe(
+    df_export,
+    use_container_width=True,
+    key="tabla_principal"
+)
 
 with st.expander("Eventos por carga (auditoría)"):
-    st.dataframe(ev.sort_values(["PATENTE", "FECHA"]), use_container_width=True)
+    st.dataframe(
+        ev.sort_values(["PATENTE", "FECHA"]),
+        use_container_width=True,
+        key="tabla_eventos"
+    )
 
-st.caption("Sistema de Control Inteligente de Consumo – Grupo BCA")
+st.caption("Control de Consumo – Grupo BCA")
