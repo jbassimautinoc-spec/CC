@@ -15,7 +15,7 @@ from datetime import datetime
 # ==========================
 st.set_page_config(page_title="Control de Consumo BCA", layout="wide")
 
-TOLERANCIA_PCT = 0.03  # 3%
+TOLERANCIA_PCT = 0.03  # 4%
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_PATH = os.path.join(BASE_DIR, "base.xlsx")
