@@ -206,6 +206,8 @@ def calcular_eventos(df):
     return df
 
 def clasificar_estado(cons_real, cons_teor, errores):
+    # Estados de auditoría refinados
+
     if errores > 0:
         return "ERROR DATOS"
     if pd.isna(cons_real) or pd.isna(cons_teor):
@@ -214,8 +216,10 @@ def clasificar_estado(cons_real, cons_teor, errores):
     min_ok = cons_teor * (1 - TOLERANCIA_PCT)
     max_ok = cons_teor * (1 + TOLERANCIA_PCT)
 
-    if cons_real < min_ok or cons_real > max_ok:
-        return "A AUDITAR"
+    if cons_real > max_ok:
+        return "SOBRECONSUMO"
+    if cons_real < min_ok:
+        return "SUBCONSUMO_ATIPICO"
     return "CORRECTO"
 
 def motivo_sin_datos(row):
@@ -232,7 +236,9 @@ def motivo_sin_datos(row):
 def icono_estado(row):
     if row["ESTADO"] == "CORRECTO":
         return "🟢"
-    if row["ESTADO"] == "A AUDITAR":
+    if row["ESTADO"] == "SOBRECONSUMO":
+        return "🔴"
+    if row["ESTADO"] == "SUBCONSUMO_ATIPICO":
         return "🟡"
     if row["ESTADO"] == "ERROR DATOS":
         return "🔴"
@@ -300,7 +306,7 @@ pat_sel = st.sidebar.multiselect("Patentes", patentes)
 modelos = sorted(df_nom["MODELO"].dropna().unique())
 mod_sel = st.sidebar.multiselect("Modelo", modelos)
 
-estados_disponibles = ["CORRECTO", "A AUDITAR", "SIN DATOS", "ERROR DATOS"]
+estados_disponibles = ["CORRECTO", "SOBRECONSUMO", "SUBCONSUMO_ATIPICO", "SIN DATOS", "ERROR DATOS"]
 estado_sel = st.sidebar.multiselect("Estado", estados_disponibles, default=estados_disponibles)
 
 df_f = df_base[
@@ -373,6 +379,7 @@ df["DESVIO_PCT"] = np.where(
 df["CONSUMO_REAL_L_100KM"] = df["CONSUMO_REAL_L_100KM"].round(2)
 df["DESVIO_PCT"] = df["DESVIO_PCT"].round(2)
 
+
 # Fecha estética
 df["FECHA_ULTIMA_CARGA"] = pd.to_datetime(df["FECHA_ULTIMA_CARGA"], errors="coerce")
 df["FECHA_ULTIMA_CARGA_STR"] = df["FECHA_ULTIMA_CARGA"].dt.strftime("%d/%m/%Y")
@@ -381,6 +388,13 @@ df["FECHA_ULTIMA_CARGA_STR"] = df["FECHA_ULTIMA_CARGA"].dt.strftime("%d/%m/%Y")
 df["ESTADO"] = df.apply(
     lambda r: clasificar_estado(r["CONSUMO_REAL_L_100KM"], r["LITROS_100KM"], r["ERRORES"]),
     axis=1
+)
+
+# Impacto estimado (solo sobreconsumo)
+df["IMPACTO_LITROS"] = np.where(
+    df["ESTADO"] == "SOBRECONSUMO",
+    (df["CONSUMO_REAL_L_100KM"] - df["LITROS_100KM"]) * df["KM_RECORRIDOS"] / 100,
+    0.0
 )
 
 df["MOTIVO_SIN_DATOS"] = df.apply(
@@ -437,38 +451,83 @@ st.sidebar.download_button(
 # ==========================
 # KPIs
 # ==========================
-st.subheader("Resumen general")
+st.subheader("Resumen gerencial")
 
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    st.markdown(
-        f'<div class="card">🟢 CORRECTO<br><h2>{(df["ESTADO"]=="CORRECTO").sum()}</h2></div>',
-        unsafe_allow_html=True
-    )
-with c2:
-    st.markdown(
-        f'<div class="card">🟡 A AUDITAR<br><h2>{(df["ESTADO"]=="A AUDITAR").sum()}</h2></div>',
-        unsafe_allow_html=True
-    )
-with c3:
-    st.markdown(
-        f'<div class="card">🟡 SIN DATOS<br><h2>{(df["ESTADO"]=="SIN DATOS").sum()}</h2></div>',
-        unsafe_allow_html=True
-    )
-with c4:
-    st.markdown(
-        f'<div class="card">🔴 ERROR DATOS<br><h2>{(df["ESTADO"]=="ERROR DATOS").sum()}</h2></div>',
-        unsafe_allow_html=True
-    )
+with st.container():
+
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(
+            f'<div class="card">🟢 CORRECTO<br><h2>{(df["ESTADO"]=="CORRECTO").sum()}</h2></div>',
+            unsafe_allow_html=True
+        )
+    with c2:
+        st.markdown(
+            f'<div class="card">🔴 SOBRECONSUMO<br><h2>{(df["ESTADO"]=="SOBRECONSUMO").sum()}</h2></div>',
+            unsafe_allow_html=True
+        )
+    with c3:
+        st.markdown(
+            f'<div class="card">🟡 SIN DATOS<br><h2>{(df["ESTADO"]=="SIN DATOS").sum()}</h2></div>',
+            unsafe_allow_html=True
+        )
+    with c4:
+        st.markdown(
+            f'<div class="card">🔴 ERROR DATOS<br><h2>{(df["ESTADO"]=="ERROR DATOS").sum()}</h2></div>',
+            unsafe_allow_html=True
+        )
 
 # Última fecha global del filtro (estética)
+
 fecha_global = ev["FECHA"].max()
 if pd.notna(fecha_global):
-    st.caption(f"📌 Última carga evaluada en el rango seleccionado: **{fecha_global.strftime('%d/%m/%Y %H:%M')}**")
+    st.markdown(
+        f"""
+        <div style="margin-top:18px; color:#6c757d; font-size:0.9rem;">
+            📌 Última carga evaluada en el rango seleccionado:
+            <b>{fecha_global.strftime('%d/%m/%Y %H:%M')}</b>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 # ==========================
 # TABLA
 # ==========================
+
+st.markdown("---")
+st.subheader("🕵️ PRO Auditoría – Ranking de prioridad")
+
+df_rank = df.copy()
+df_rank["PRIORIDAD"] = df_rank["ESTADO"].map({
+    "ERROR DATOS": 0,
+    "SOBRECONSUMO": 1,
+    "SUBCONSUMO_ATIPICO": 2,
+    "SIN DATOS": 3,
+    "CORRECTO": 4,
+}).fillna(9)
+
+df_rank = df_rank.sort_values(
+    ["PRIORIDAD", "IMPACTO_LITROS", "DESVIO_PCT"],
+    ascending=[True, False, False]
+)
+
+top_n = st.selectbox("Top unidades a auditar", [5, 10, 20], index=0, key="top_audit")
+
+st.dataframe(
+    df_rank.head(top_n)[
+        [
+            "PATENTE", "MODELO", "ESTADO",
+            "KM_RECORRIDOS", "CONSUMO_REAL_L_100KM",
+            "LITROS_100KM", "DESVIO_PCT", "IMPACTO_LITROS"
+        ]
+    ],
+    use_container_width=True,
+    key="ranking_auditoria"
+)
+
 st.subheader("Detalle por patente")
 
 st.dataframe(
